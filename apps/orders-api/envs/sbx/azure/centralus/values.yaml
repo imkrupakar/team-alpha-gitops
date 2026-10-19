@@ -1,11 +1,12 @@
 # Cluster leaf sbx/azure/centralus: image pin + cluster-specific values.
-# First bring-up: ingress + ESO disabled; image tag/digest set by the manual seed (az acr build).
-goldenChart: "2.6.0"
+goldenChart: "2.7.0"
 image:
   repository: acrplatsbxcus14462b.azurecr.io/orders-api
-  tag: "0.1.0" # set after az acr build
-  digest: "sha256:21d2d82b5a11846c31bd37bf4a41a554dbf7f3a3ce57de99107c720aef176295" # set after az acr build
-ingress:
-  enabled: false
+  tag: "0.1.0"
+  digest: "sha256:21d2d82b5a11846c31bd37bf4a41a554dbf7f3a3ce57de99107c720aef176295"
+# Exercise the Istio Gateway path: HTTPRoute for this host attaches to platform-gateway.
+route:
+  enabled: true
+  host: orders.sbx.local
 externalSecret:
   enabled: false

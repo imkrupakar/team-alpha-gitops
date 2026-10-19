@@ -1,9 +1,10 @@
 # orders-api — common values applied to every environment.
 image:
   repository: acrplatsbxcus14462b.azurecr.io/orders-api
-ingress:
+# North-south routing via the shared Istio Gateway (Gateway API). TLS is terminated at the L7 LB.
+route:
   enabled: true
-  clusterIssuer: letsencrypt-staging # untrusted certs, safe rate limits; prd overrides
+  host: orders.example.com # per-env host overridden in the leaf
 externalSecret:
   enabled: true
   storeRef: team-alpha-store
