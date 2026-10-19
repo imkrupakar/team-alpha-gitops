@@ -1,0 +1,297 @@
+# Promote a service's image (SemVer tag + immutable digest) from one CLUSTER LEAF to another.
+# A leaf is apps/<svc>/envs/<env>/<cloud>/<region>/values.yaml; it holds that cluster's pin and
+# is what opts the service in to that cluster (see the workload ApplicationSet).
+#
+# Rings: sbx -> dev -> stg -> prd/azure/eastus (canary) -> prd/azure/westus -> prd/aws/us-east-1.
+# CI only ever writes sbx; every higher ring is this gated promotion, one cluster per run.
+#
+# GUARDRAILS (enforced below, not just documented)
+#   one ring at a time      sbx->dev->stg->prd. Same-env hops (stg/azure -> stg/aws) are fine. Skipping a ring
+#                           needs `skip_justification` (emergencies), which is recorded in the PR.
+#   canary first            from below prd you may only enter prd through PRD_CANARY; the other prd clusters
+#                           are promoted prd -> prd afterwards.
+#   stable only             stg and prd take only X.Y.Z (built from a releases/M### branch). A prerelease
+#                           cannot go there, so the digest tested in stg is the digest that ships.
+#   provenance              entering stg or prd, the digest must be cosign-signed by THIS service's cd.yml
+#                           running on a releases/M### branch (not any signer, not a PR or feature branch).
+#                           The service repo is assumed to be named like the service (orders-api, ...).
+#
+# REGISTRY ACTION
+#   to_env != prd         no artifact copy: sbx..stg all reference the SAME nonprod-ACR digest
+#   prd + azure, from stg `az acr import` of the exact digest into the ISOLATED prod ACR (build-once)
+#   prd + azure, from prd ring -> ring: nothing to copy (the prod ACR is geo-replicated)
+#   prd + aws             `cosign copy` of the exact digest (+ signatures) into the region's ECR
+# then the target leaf is pinned in a PR. Rollback = revert that PR.
+name: promote
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service directory under apps/ (e.g. orders-api)
+        required: true
+      from_cluster:
+        description: "Source cluster leaf <env>/<cloud>/<region> to copy the pin FROM (e.g. stg/azure/eastus)"
+        required: true
+      to_cluster:
+        description: "Target cluster leaf <env>/<cloud>/<region> to pin (e.g. prd/azure/westus)"
+        required: true
+      skip_justification:
+        description: "EMERGENCY ONLY: required to skip a ring (e.g. sbx -> stg). Say why; it is recorded in the PR."
+        required: false
+        default: ""
+env:
+  ORG: krupakar-hyland
+  NONPROD_ACR: nonprodacrplatform
+  PROD_ACR: prodacrplatform
+  PRD_CANARY: prd/azure/eastus # the only prd cluster that may be entered from below prd
+# two promotions of the same service into the same cluster must not race each other
+concurrency:
+  group: promote-${{ inputs.service }}-${{ inputs.to_cluster }}
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate rings and pick registry action
+        id: plan
+        env:
+          SVC: ${{ inputs.service }}
+          FROM: ${{ inputs.from_cluster }}
+          TO: ${{ inputs.to_cluster }}
+          SKIP_JUSTIFICATION: ${{ inputs.skip_justification }}
+        run: |
+          set -euo pipefail
+          re='^(sbx|dev|stg|prd)/(azure|aws|gke)/[a-z0-9-]+$'
+          [[ "$SVC" =~ ^[a-z0-9-]+$ ]] || { echo "::error::invalid service name"; exit 1; }
+          [[ "$FROM" =~ $re && "$TO" =~ $re ]] || { echo "::error::clusters must look like <env>/<cloud>/<region>"; exit 1; }
+          [ "$FROM" != "$TO" ] || { echo "::error::from_cluster and to_cluster are the same"; exit 1; }
+          IFS=/ read -r FROM_ENV FROM_CLOUD FROM_REGION <<<"$FROM"
+          IFS=/ read -r TO_ENV TO_CLOUD TO_REGION <<<"$TO"
+          rank() { case "$1" in sbx) echo 0;; dev) echo 1;; stg) echo 2;; prd) echo 3;; esac; }
+          FR="$(rank "$FROM_ENV")"; TR="$(rank "$TO_ENV")"
+          [ "$TR" -ge "$FR" ] || { echo "::error::cannot promote backwards ($FROM_ENV -> $TO_ENV)"; exit 1; }
+          # one ring at a time; skipping needs a written justification (kept in the PR)
+          SKIPPED=false
+          if [ "$TR" -gt $((FR + 1)) ]; then
+            [ -n "${SKIP_JUSTIFICATION//[[:space:]]/}" ] || { echo "::error::cannot skip rings ($FROM_ENV -> $TO_ENV): promote one ring at a time. For an emergency set skip_justification."; exit 1; }
+            SKIPPED=true
+          fi
+          # canary first: below prd you may only enter prd through the canary cluster
+          if [ "$TO_ENV" = prd ] && [ "$FROM_ENV" != prd ] && [ "$TO" != "$PRD_CANARY" ]; then
+            echo "::error::enter prd through the canary $PRD_CANARY first; then promote prd -> prd for the other clusters"; exit 1
+          fi
+          FROM_FILE="apps/${SVC}/envs/${FROM}/values.yaml"
+          [ -f "$FROM_FILE" ] || { echo "::error::source leaf not found: $FROM_FILE"; exit 1; }
+          # Only entering prd needs an artifact copy; the registry is per cloud.
+          MODE=none
+          if [ "$TO_ENV" = prd ]; then
+            case "$TO_CLOUD" in
+              azure) [ "$FROM_ENV" = prd ] || MODE=acr ;;
+              aws)   MODE=ecr ;;
+              *)     echo "::error::no registry promotion defined for cloud '$TO_CLOUD'"; exit 1 ;;
+            esac
+          fi
+          # Provenance is checked wherever a release candidate enters a pre-prod/prod ring.
+          VERIFY=false
+          case "$TO_ENV" in stg|prd) VERIFY=true ;; esac
+          {
+            echo "from_env=$FROM_ENV"
+            echo "to_env=$TO_ENV"
+            echo "to_region=$TO_REGION"
+            echo "from_file=$FROM_FILE"
+            echo "to_file=apps/${SVC}/envs/${TO}/values.yaml"
+            echo "mode=$MODE"
+            echo "verify=$VERIFY"
+            echo "skipped=$SKIPPED"
+            # signer identity this service's release builds carry (Fulcio cert subject)
+            echo "identity_re=^https://github.com/${ORG}/${SVC}/\.github/workflows/cd\.yml@refs/heads/releases/M[0-9]+\$"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read source tag + digest (stable only into stg/prd)
+        id: src
+        env:
+          F: ${{ steps.plan.outputs.from_file }}
+          TO_ENV: ${{ steps.plan.outputs.to_env }}
+        run: |
+          TAG="$(yq '.image.tag' "$F")"
+          DIG="$(yq '.image.digest' "$F")"
+          for v in "$TAG" "$DIG"; do [ -n "$v" ] && [ "$v" != "null" ] || { echo "::error::missing tag/digest in $F"; exit 1; }; done
+          case "$TO_ENV" in
+            stg|prd)
+              [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::only stable releases (X.Y.Z from a releases/M### branch) can enter $TO_ENV; '$TAG' is a prerelease. Cut a release branch so the digest tested in stg is the one that ships."; exit 1; } ;;
+          esac
+          echo "tag=$TAG"    >> "$GITHUB_OUTPUT"
+          echo "digest=$DIG" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC, promotion identity)
+        if: steps.plan.outputs.mode != 'none' || steps.plan.outputs.verify == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_PROMOTE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install cosign
+        if: steps.plan.outputs.mode != 'none' || steps.plan.outputs.verify == 'true'
+        run: |
+          cosign version >/dev/null 2>&1 || { curl -sSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && chmod +x /usr/local/bin/cosign; }
+
+      # The signature lives next to the image in the NONPROD registry, so that is where provenance is proven.
+      - name: Verify provenance at the source (signed by this service's release build)
+        if: steps.plan.outputs.verify == 'true'
+        env:
+          SVC: ${{ inputs.service }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          IDENTITY_RE: ${{ steps.plan.outputs.identity_re }}
+        run: |
+          az acr login --name "$NONPROD_ACR"
+          cosign verify "${NONPROD_ACR}.azurecr.io/${SVC}@${DIGEST}" \
+            --certificate-identity-regexp "$IDENTITY_RE" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      # ---- prd + azure: import into the isolated prod ACR (build-once) ----
+      - name: Import image to prod ACR by digest (build-once)
+        if: steps.plan.outputs.mode == 'acr'
+        env:
+          SVC: ${{ inputs.service }}
+          TAG: ${{ steps.src.outputs.tag }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+        run: |
+          az acr import \
+            --name "$PROD_ACR" \
+            --source "${NONPROD_ACR}.azurecr.io/${SVC}@${DIGEST}" \
+            --image "${SVC}:${TAG}" \
+            --force
+          az acr repository update --name "$PROD_ACR" \
+            --image "${SVC}:${TAG}" \
+            --write-enabled false --delete-enabled false
+
+      # `az acr import` carries the image but NOT its cosign signature, so a verify against the prod ACR could
+      # never succeed. Provenance was proven at the source above; here we prove the same digest arrived.
+      - name: Confirm the digest landed in prod ACR
+        if: steps.plan.outputs.mode == 'acr'
+        env:
+          SVC: ${{ inputs.service }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+        run: |
+          GOT="$(az acr repository show --name "$PROD_ACR" --image "${SVC}@${DIGEST}" --query digest -o tsv)"
+          [ "$GOT" = "$DIGEST" ] || { echo "::error::prod ACR does not hold ${DIGEST} (got '${GOT}')"; exit 1; }
+
+      # ---- prd + aws: copy the exact digest (and its signatures) into the region's ECR ----
+      - name: AWS login (OIDC, promotion role)
+        if: steps.plan.outputs.mode == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROMOTE_ROLE_ARN }}
+          aws-region: ${{ steps.plan.outputs.to_region }}
+
+      - name: ECR login
+        id: ecr
+        if: steps.plan.outputs.mode == 'ecr'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Copy image to ECR by digest (build-once)
+        if: steps.plan.outputs.mode == 'ecr'
+        env:
+          SVC: ${{ inputs.service }}
+          TAG: ${{ steps.src.outputs.tag }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          az acr login --name "$NONPROD_ACR"
+          # ECR tags are immutable, so make the copy idempotent: skip when this tag already holds this digest.
+          EXISTING="$(aws ecr describe-images --repository-name "$SVC" --image-ids imageTag="$TAG" \
+            --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [ "$EXISTING" = "$DIGEST" ]; then
+            echo "ECR already holds ${SVC}:${TAG}@${DIGEST}; nothing to copy"
+          else
+            # cosign copy preserves the manifest digest and carries signatures/attestations along.
+            cosign copy "${NONPROD_ACR}.azurecr.io/${SVC}@${DIGEST}" "${REGISTRY}/${SVC}:${TAG}"
+          fi
+
+      - name: Verify the signature travelled to ECR (same signer identity)
+        if: steps.plan.outputs.mode == 'ecr'
+        env:
+          SVC: ${{ inputs.service }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IDENTITY_RE: ${{ steps.plan.outputs.identity_re }}
+        run: |
+          cosign verify "${REGISTRY}/${SVC}@${DIGEST}" \
+            --certificate-identity-regexp "$IDENTITY_RE" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - name: Pin target cluster leaf (same digest)
+        id: pin
+        env:
+          SVC: ${{ inputs.service }}
+          TO: ${{ inputs.to_cluster }}
+          TAG: ${{ steps.src.outputs.tag }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          MODE: ${{ steps.plan.outputs.mode }}
+          FROM_ENV: ${{ steps.plan.outputs.from_env }}
+          TO_ENV: ${{ steps.plan.outputs.to_env }}
+          FROM_FILE: ${{ steps.plan.outputs.from_file }}
+          TO_FILE: ${{ steps.plan.outputs.to_file }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          NEW=false
+          if [ ! -f "$TO_FILE" ]; then
+            # First promotion into this cluster: create the leaf (this is what opts the service in).
+            NEW=true
+            # A leaf without goldenChart is rejected by the PR check, so a new leaf starts on the chart version
+            # the source ring already runs. After that the pin is team-owned and promote never touches it.
+            GC="$(yq '.goldenChart // ""' "$FROM_FILE")"
+            [ -n "$GC" ] || { echo "::error::source leaf $FROM_FILE has no goldenChart pin; fix the source ring first"; exit 1; }
+            mkdir -p "$(dirname "$TO_FILE")"
+            printf '# Cluster leaf %s: image pin + cluster-specific values.\n# Created by the promote workflow; review ingress.host and identity annotations.\n' "$TO" > "$TO_FILE"
+            yq -i ".goldenChart = \"${GC}\"" "$TO_FILE"
+            if [ "$FROM_ENV" = "$TO_ENV" ]; then
+              HOST="$(yq '.ingress.host // ""' "$FROM_FILE")"
+              [ -z "$HOST" ] || yq -i ".ingress.host = \"${HOST}\"" "$TO_FILE"
+            fi
+          fi
+          yq -i ".image.tag = \"${TAG}\" | .image.digest = \"${DIGEST}\"" "$TO_FILE"
+          # ECR hosts are regional: set the repository on the leaf unless it already has one.
+          if [ "$MODE" = ecr ]; then
+            yq -i ".image.repository = (.image.repository // \"${REGISTRY}/${SVC}\")" "$TO_FILE"
+          fi
+          echo "new_leaf=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Open promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SVC: ${{ inputs.service }}
+          FROM: ${{ inputs.from_cluster }}
+          TO: ${{ inputs.to_cluster }}
+          TAG: ${{ steps.src.outputs.tag }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          NEW_LEAF: ${{ steps.pin.outputs.new_leaf }}
+          SKIPPED: ${{ steps.plan.outputs.skipped }}
+          SKIP_JUSTIFICATION: ${{ inputs.skip_justification }}
+        run: |
+          BRANCH="promote/${SVC}-${TO//\//-}-${TAG}"
+          git config user.name  "promote-bot"
+          git config user.email "promote-bot@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A apps
+          MSG="promote(${SVC}): ${FROM} -> ${TO} ${TAG} (${DIGEST})"
+          [ "$SKIPPED" != true ] || MSG="${MSG}"$'\n\n'"Ring skipped. Justification: ${SKIP_JUSTIFICATION}"
+          git commit -m "$MSG"
+          git push origin "$BRANCH"
+          BODY="Promotes ${SVC} ${TAG} (${DIGEST}) from ${FROM} to ${TO}. Merge gated by CODEOWNERS."
+          if [ "$SKIPPED" = true ]; then
+            BODY="${BODY}"$'\n\n'"**RING SKIPPED (emergency).** Justification: ${SKIP_JUSTIFICATION}"
+          fi
+          if [ "$NEW_LEAF" = true ]; then
+            BODY="${BODY}"$'\n\n'"**New cluster leaf created** — ${SVC} will deploy to ${TO} once merged. It starts on the golden chart version of the source ring; review ingress.host and any identity annotations (IRSA role-arn / workload-identity client-id) before approving."
+          fi
+          gh pr create --fill \
+            --title "promote(${SVC}): ${TO} <- ${TAG}" \
+            --body "$BODY"

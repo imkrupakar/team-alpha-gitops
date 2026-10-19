@@ -1,0 +1,14 @@
+# PR check: the platform owns the rules (platform-gitops/tools/check_team_layout.py), this repo just calls them.
+# Fails the PR on a missing/invalid goldenChart pin, a leaf for a cluster that does not exist, a pin outside
+# the leaf, a chart upgrade that skips a ring, or a values file that no longer renders with the pinned chart.
+# Make the `validate / check` job a required check in branch protection.
+name: validate
+on:
+  pull_request:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  validate:
+    uses: krupakar-hyland/platform-gitops/.github/workflows/validate-team-repo.yml@main
+    secrets: inherit

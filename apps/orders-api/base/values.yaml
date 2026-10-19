@@ -1,0 +1,15 @@
+# orders-api — common values applied to every environment.
+image:
+  repository: acrplatsbxcus14462b.azurecr.io/orders-api
+ingress:
+  enabled: true
+  clusterIssuer: letsencrypt-staging # untrusted certs, safe rate limits; prd overrides
+externalSecret:
+  enabled: true
+  storeRef: team-alpha-store
+  data:
+    - secretKey: DB_PASSWORD
+      remoteKey: orders-db-password
+env:
+  - name: SERVICE_NAME
+    value: orders-api

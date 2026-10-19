@@ -1,0 +1,4 @@
+# sbx-wide values: sizing shared by every cloud/region in sbx.
+replicaCount: 1
+autoscaling:
+  enabled: false

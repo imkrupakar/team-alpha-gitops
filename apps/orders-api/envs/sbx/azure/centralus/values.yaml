@@ -1,0 +1,11 @@
+# Cluster leaf sbx/azure/centralus: image pin + cluster-specific values.
+# First bring-up: ingress + ESO disabled; image tag/digest set by the manual seed (az acr build).
+goldenChart: "2.6.0"
+image:
+  repository: acrplatsbxcus14462b.azurecr.io/orders-api
+  tag: "PLACEHOLDER"      # set after az acr build
+  digest: "PLACEHOLDER"   # set after az acr build
+ingress:
+  enabled: false
+externalSecret:
+  enabled: false
