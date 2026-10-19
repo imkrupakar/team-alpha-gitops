@@ -13,3 +13,8 @@ externalSecret:
 env:
   - name: SERVICE_NAME
     value: orders-api
+# distroless 'nonroot' is uid 65532; pin numerically so kubelet can verify runAsNonRoot.
+podSecurityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
