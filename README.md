@@ -12,19 +12,23 @@ apps/orders-api/
 └── envs/
     ├── sbx/
     │   ├── values.yaml                    # env-wide: replicas, autoscaling       (optional layer)
-    │   └── azure/eastus/values.yaml       # CLUSTER LEAF: image tag+digest pin, ingress host
-    ├── dev/ stg/                          # same shape, azure/eastus leaf
+    │   ├── azure/centralus/values.yaml    # CLUSTER LEAF: image tag+digest pin, goldenChart, route host
+    │   └── aws/us-east-2/values.yaml      # CLUSTER LEAF on the EKS cluster (ECR image)
+    ├── dev/ stg/                          # same shape (convention; added by promotion)
     └── prd/
         ├── values.yaml                    # env-wide prd sizing
         ├── azure/
         │   ├── values.yaml                # cloud-wide: prod ACR repository
-        │   ├── eastus/values.yaml         # leaf (ring 1, canary)
-        │   └── westus/values.yaml         # leaf (ring 2)
+        │   ├── <region-a>/values.yaml     # leaf (ring 1, canary)
+        │   └── <region-b>/values.yaml     # leaf (ring 2)
         └── aws/
-            └── us-east-1/values.yaml      # leaf (ring 3): ECR repository (regional), pin, IRSA role-arn
+            └── <region>/values.yaml       # leaf (ring 3): ECR repository (regional), pin, IRSA role-arn
+
+config/envs/<env>/<cloud>/<region>/        # team-owned ESO SecretStore + eso-reader ServiceAccount
+                                           #   (per cluster; see platform-gitops tenants/_template/README.md)
 ```
 
-`payments-api/` has the same shape.
+Only the sbx leaves exist today; the dev/stg/prd rows show the convention (promotion creates them).
 
 ## How a cluster picks its values
 
@@ -58,13 +62,13 @@ Don't use the top-level keys `name`, `server`, `metadata`, `environment`, `cloud
 
 | Task | How |
 | --- | --- |
-| New service | Add `apps/<svc>/base/values.yaml` and the sbx leaf (`goldenChart` + `ingress.host`); then CI pins the image. |
+| New service | Add `apps/<svc>/base/values.yaml` and the sbx leaf (`goldenChart` + `route.host`); then CI pins the image. |
 | Upgrade the golden chart | Change `goldenChart` in the leaf, sbx first, then dev, stg, prd (a ring may not be ahead of the one below it). Check `golden-helm-charts/CHANGELOG.md` for upgrade notes first. |
 | Promote a service | Run **promote** with `from_cluster` / `to_cluster` as `<env>/<cloud>/<region>`, e.g. `stg/azure/eastus` -> `prd/azure/eastus`. |
-| New region / cloud | Platform onboards the cluster; then promote each service into `prd/<cloud>/<region>`. The workflow creates the leaf; review `ingress.host` and identity annotations in the PR. |
+| New region / cloud | Platform onboards the cluster; then promote each service into `prd/<cloud>/<region>`. The workflow creates the leaf; review `route.host` and identity annotations in the PR. |
 
-Promotion into prd copies the exact digest into that cloud's registry (`az acr import` for Azure,
-`cosign copy` into ECR for AWS), then pins. See [`docs/artifact-promotion.md`](../docs/artifact-promotion.md).
+Promotion into prd copies the exact digest into that cloud's registry (`az acr import` for Azure, or a
+registry-to-registry copy such as `crane`/`cosign copy` into ECR for AWS), then pins it in the leaf.
 
 ## Checks and guardrails
 
