@@ -1,0 +1,12 @@
+# Cluster leaf sbx/aws/us-east-2: image pin (ECR) + cluster-specific values.
+goldenChart: "2.7.0"
+image:
+  repository: 407995386968.dkr.ecr.us-east-2.amazonaws.com/orders-api
+  tag: "0.1.0"
+  digest: "sha256:607bd6fd1a3c8e974e3dfe031776596c4b9ddf14e2c85bbbbc4905fe7d452423"
+# Exercise the Istio Gateway path: HTTPRoute for this host attaches to platform-gateway.
+route:
+  enabled: true
+  host: orders.sbx.local
+externalSecret:
+  enabled: false
