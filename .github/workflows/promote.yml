@@ -2,7 +2,7 @@
 # A leaf is apps/<svc>/envs/<env>/<cloud>/<region>/values.yaml; it holds that cluster's pin and
 # is what opts the service in to that cluster (see the workload ApplicationSet).
 #
-# Rings: sbx -> dev -> stg -> prd/azure/eastus (canary) -> prd/azure/westus -> prd/aws/us-east-1.
+# Rings: sbx -> dev -> stg -> prd/azure/centralus (canary) -> prd/aws/us-east-2.
 # CI only ever writes sbx; every higher ring is this gated promotion, one cluster per run.
 #
 # GUARDRAILS (enforced below, not just documented)
@@ -30,10 +30,10 @@ on:
         description: Service directory under apps/ (e.g. orders-api)
         required: true
       from_cluster:
-        description: "Source cluster leaf <env>/<cloud>/<region> to copy the pin FROM (e.g. stg/azure/eastus)"
+        description: "Source cluster leaf <env>/<cloud>/<region> to copy the pin FROM (e.g. sbx/azure/centralus)"
         required: true
       to_cluster:
-        description: "Target cluster leaf <env>/<cloud>/<region> to pin (e.g. prd/azure/westus)"
+        description: "Target cluster leaf <env>/<cloud>/<region> to pin (e.g. dev/azure/centralus)"
         required: true
       skip_justification:
         description: "EMERGENCY ONLY: required to skip a ring (e.g. sbx -> stg). Say why; it is recorded in the PR."
@@ -43,7 +43,7 @@ env:
   ORG: krupakar-hyland
   NONPROD_ACR: nonprodacrplatform
   PROD_ACR: prodacrplatform
-  PRD_CANARY: prd/azure/eastus # the only prd cluster that may be entered from below prd
+  PRD_CANARY: prd/azure/centralus # the only prd cluster that may be entered from below prd
 # two promotions of the same service into the same cluster must not race each other
 concurrency:
   group: promote-${{ inputs.service }}-${{ inputs.to_cluster }}
@@ -250,11 +250,11 @@ jobs:
             GC="$(yq '.goldenChart // ""' "$FROM_FILE")"
             [ -n "$GC" ] || { echo "::error::source leaf $FROM_FILE has no goldenChart pin; fix the source ring first"; exit 1; }
             mkdir -p "$(dirname "$TO_FILE")"
-            printf '# Cluster leaf %s: image pin + cluster-specific values.\n# Created by the promote workflow; review ingress.host and identity annotations.\n' "$TO" > "$TO_FILE"
+            printf '# Cluster leaf %s: image pin + cluster-specific values.\n# Created by the promote workflow; review route.host and identity annotations.\n' "$TO" > "$TO_FILE"
             yq -i ".goldenChart = \"${GC}\"" "$TO_FILE"
             if [ "$FROM_ENV" = "$TO_ENV" ]; then
-              HOST="$(yq '.ingress.host // ""' "$FROM_FILE")"
-              [ -z "$HOST" ] || yq -i ".ingress.host = \"${HOST}\"" "$TO_FILE"
+              HOST="$(yq '.route.host // ""' "$FROM_FILE")"
+              [ -z "$HOST" ] || yq -i ".route.host = \"${HOST}\"" "$TO_FILE"
             fi
           fi
           yq -i ".image.tag = \"${TAG}\" | .image.digest = \"${DIGEST}\"" "$TO_FILE"
@@ -290,7 +290,7 @@ jobs:
             BODY="${BODY}"$'\n\n'"**RING SKIPPED (emergency).** Justification: ${SKIP_JUSTIFICATION}"
           fi
           if [ "$NEW_LEAF" = true ]; then
-            BODY="${BODY}"$'\n\n'"**New cluster leaf created** — ${SVC} will deploy to ${TO} once merged. It starts on the golden chart version of the source ring; review ingress.host and any identity annotations (IRSA role-arn / workload-identity client-id) before approving."
+            BODY="${BODY}"$'\n\n'"**New cluster leaf created** — ${SVC} will deploy to ${TO} once merged. It starts on the golden chart version of the source ring; review route.host and any identity annotations (IRSA role-arn / workload-identity client-id) before approving."
           fi
           gh pr create --fill \
             --title "promote(${SVC}): ${TO} <- ${TAG}" \
