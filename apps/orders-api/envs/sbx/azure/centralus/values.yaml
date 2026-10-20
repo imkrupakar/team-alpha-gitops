@@ -1,5 +1,5 @@
 # Cluster leaf sbx/azure/centralus: image pin + cluster-specific values.
-goldenChart: "2.7.0"
+goldenChart: "3.0.0"
 image:
   repository: acrplatsbxcus14462b.azurecr.io/orders-api
   tag: "0.1.0"
