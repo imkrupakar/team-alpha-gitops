@@ -83,3 +83,5 @@ registry-to-registry copy such as `crane`/`cosign copy` into ECR for AWS), then 
 - A new leaf created by `promote` starts on the golden chart version of the source ring.
 
 `CODEOWNERS` already covers every path under `apps/*/envs/prd/`, including the per-cluster leaves.
+
+# platform-actions consolidation: validate + promote are thin callers (see .github/workflows).
