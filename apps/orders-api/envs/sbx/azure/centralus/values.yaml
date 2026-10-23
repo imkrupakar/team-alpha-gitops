@@ -3,7 +3,7 @@ goldenChart: "3.0.0"
 image:
   repository: acrplatsbxcus14462b.azurecr.io/orders-api
   tag: "0.1.0"
-  digest: "sha256:e47142ebd21a489c788b91909136bb3861675f043393e4c2cf89ed44a3824354"
+  digest: "sha256:d3c785145b7a64d358429782e9295da9d27df526007148e883bf0c399c63d919"
 # Exercise the Istio Gateway path: HTTPRoute for this host attaches to platform-gateway.
 route:
   enabled: true
