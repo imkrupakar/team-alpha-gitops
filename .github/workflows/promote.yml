@@ -300,7 +300,9 @@ jobs:
           MSG="promote(${SVC}): ${FROM} -> ${TO} ${TAG} (${DIGEST})"
           [ "$SKIPPED" != true ] || MSG="${MSG}"$'\n\n'"Ring skipped. Justification: ${SKIP_JUSTIFICATION}"
           git commit -m "$MSG"
-          git push origin "$BRANCH"
+          # Force-push: the branch name is deterministic per (service,target,tag) and this job is the
+          # only writer (see concurrency group), so a re-run safely replaces a stale attempt.
+          git push -f origin "$BRANCH"
           BODY="Promotes ${SVC} ${TAG} (${DIGEST}) from ${FROM} to ${TO}. Merge gated by CODEOWNERS."
           if [ "$SKIPPED" = true ]; then
             BODY="${BODY}"$'\n\n'"**RING SKIPPED (emergency).** Justification: ${SKIP_JUSTIFICATION}"
@@ -308,6 +310,7 @@ jobs:
           if [ "$NEW_LEAF" = true ]; then
             BODY="${BODY}"$'\n\n'"**New cluster leaf created** — ${SVC} will deploy to ${TO} once merged. It starts on the golden chart version of the source ring; review route.host and any identity annotations (IRSA role-arn / workload-identity client-id) before approving."
           fi
-          gh pr create --fill \
-            --title "promote(${SVC}): ${TO} <- ${TAG}" \
-            --body "$BODY"
+          # Create the PR, or update the body if one already exists for this branch (idempotent re-run).
+          if ! gh pr create --fill --title "promote(${SVC}): ${TO} <- ${TAG}" --body "$BODY" 2>/dev/null; then
+            gh pr edit "$BRANCH" --title "promote(${SVC}): ${TO} <- ${TAG}" --body "$BODY"
+          fi
