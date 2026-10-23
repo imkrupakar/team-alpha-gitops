@@ -1,0 +1,14 @@
+# Cluster container-registry map (per-cluster ACR/ECR topology).
+#
+# In this platform each cluster has its OWN registry (one ACR/ECR per cluster), so an image is
+# promoted by COPYING the exact digest (build-once) from the source cluster's registry into the
+# target cluster's registry. This file is the single source of truth for "which registry belongs
+# to which cluster". Onboarding a new cluster's registry = add ONE line here (the "one file away"
+# paved-road step); the promote workflow reads the TARGET registry here to copy the image and pin
+# the leaf's image.repository.
+#
+# Key = <env>/<cloud>/<region>  (the cluster leaf path).  Value = registry login server host.
+registries:
+  sbx/azure/centralus: acrplatsbxcus14462b.azurecr.io
+  dev/azure/centralus: acrplatdevcus5826df.azurecr.io
+  sbx/aws/us-east-2: 407995386968.dkr.ecr.us-east-2.amazonaws.com
