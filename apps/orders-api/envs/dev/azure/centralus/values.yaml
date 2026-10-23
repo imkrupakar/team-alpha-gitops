@@ -1,0 +1,7 @@
+# Cluster leaf dev/azure/centralus: image pin + cluster-specific values.
+# Created by the promote workflow; review route.host and identity annotations.
+goldenChart: 3.0.0
+image:
+  tag: 0.1.0
+  digest: sha256:d3c785145b7a64d358429782e9295da9d27df526007148e883bf0c399c63d919
+  repository: acrplatdevcus5826df.azurecr.io/orders-api
