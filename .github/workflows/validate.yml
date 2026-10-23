@@ -10,5 +10,5 @@ permissions:
   packages: read
 jobs:
   validate:
-    uses: krupakar-hyland/platform-gitops/.github/workflows/validate-team-repo.yml@main
+    uses: krupakar-hyland/platform-actions/.github/workflows/validate-team-repo.yml@main
     secrets: inherit

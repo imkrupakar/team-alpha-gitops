@@ -75,8 +75,11 @@ registry-to-registry copy such as `crane`/`cosign copy` into ECR for AWS), then 
 - **PR check** (`.github/workflows/validate.yml`) calls the platform's reusable workflow. It fails a PR for a missing or invalid
   `goldenChart`, a leaf for a cluster that is not in `fleet.yaml`, an image pin outside the leaf, a chart upgrade that skips a ring,
   or values that no longer render with the pinned chart. Make `validate / check` a required check.
-- **`promote`** goes one ring at a time (an emergency skip needs `skip_justification`), enters prd through the canary
-  `prd/azure/eastus`, accepts only stable `X.Y.Z` into stg/prd, and verifies the digest was signed by that service's release build.
+- **`promote`** (`.github/workflows/promote.yml`) is a thin caller of the platform's reusable workflow
+  (`krupakar-hyland/platform-actions/.github/workflows/promote.yml`); the per-cluster registry map lives in
+  `platform-actions/registries.yaml` (onboarding a cluster's registry is "one line" there). It goes one ring at a time
+  (an emergency skip needs `skip_justification`), enters prd through the canary `prd/azure/eastus`, accepts only stable
+  `X.Y.Z` into stg/prd, and verifies the digest was signed by that service's release build.
 - A new leaf created by `promote` starts on the golden chart version of the source ring.
 
 `CODEOWNERS` already covers every path under `apps/*/envs/prd/`, including the per-cluster leaves.
