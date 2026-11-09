@@ -1,0 +1,12 @@
+# Cluster leaf sbx/azure/centralus: image pin + cluster-specific values.
+goldenChart: "3.0.0"
+image:
+  repository: sbxacrplatform.azurecr.io/orders-api
+  tag: "0.1.0"
+  digest: "sha256:e6257dcc8a00b22ac931fc95f53edb10edfd1d92a87129b77280016fd2ba095c"
+# Exercise the Istio Gateway path: HTTPRoute for this host attaches to platform-gateway.
+route:
+  enabled: true
+  host: orders.sbx.local
+externalSecret:
+  enabled: false

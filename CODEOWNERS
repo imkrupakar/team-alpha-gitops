@@ -1,0 +1,4 @@
+# team-alpha owns and reviews all changes to their config repo.
+* @imkrupakar/team-alpha
+# Promotions to production require an extra approval.
+apps/*/envs/prd/ @imkrupakar/team-alpha-leads

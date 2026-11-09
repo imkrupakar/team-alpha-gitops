@@ -1,0 +1,21 @@
+# orders-api — common values applied to every environment.
+image:
+  repository: sbxacrplatform.azurecr.io/orders-api
+# North-south routing via the shared Istio Gateway (Gateway API). TLS is terminated at the L7 LB.
+route:
+  enabled: true
+  host: orders.example.com # per-env host overridden in the leaf
+externalSecret:
+  enabled: true
+  storeRef: team-alpha-store
+  data:
+    - secretKey: DB_PASSWORD
+      remoteKey: orders-db-password
+env:
+  - name: SERVICE_NAME
+    value: orders-api
+# distroless 'nonroot' is uid 65532; pin numerically so kubelet can verify runAsNonRoot.
+podSecurityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532

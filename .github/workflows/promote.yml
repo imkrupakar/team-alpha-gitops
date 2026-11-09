@@ -1,0 +1,33 @@
+# Thin caller: the promotion policy, per-cluster registry topology and PR mechanics live in the
+# PE-owned reusable workflow in platform-actions (single source of truth for every team).
+# This file only wires the team repo's dispatch inputs + promotion secrets into it.
+name: promote
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service directory under apps/ (e.g. orders-api)"
+        required: true
+      from_cluster:
+        description: "Source cluster leaf <env>/<cloud>/<region> (e.g. sbx/azure/centralus)"
+        required: true
+      to_cluster:
+        description: "Target cluster leaf <env>/<cloud>/<region> (e.g. dev/azure/centralus)"
+        required: true
+      skip_justification:
+        description: "EMERGENCY ONLY: reason to skip a ring (recorded in the PR)"
+        required: false
+        default: ""
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+jobs:
+  promote:
+    uses: imkrupakar/platform-actions/.github/workflows/promote.yml@main
+    with:
+      service: ${{ inputs.service }}
+      from_cluster: ${{ inputs.from_cluster }}
+      to_cluster: ${{ inputs.to_cluster }}
+      skip_justification: ${{ inputs.skip_justification }}
+    secrets: inherit
